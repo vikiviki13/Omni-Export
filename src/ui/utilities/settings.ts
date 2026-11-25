@@ -7,7 +7,7 @@ export const DEFAULT_SETTINGS: Settings = {
   includeHidden: false,
   concurrency: 3,
   psd: {
-    mode: 'fidelity',
+    mode: 'editable',
     preserveGroups: true,
     flattenInstances: false,
     separateFrames: true,

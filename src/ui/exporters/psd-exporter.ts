@@ -178,17 +178,21 @@ function planNode(
     else if (blurFx) plan.warnings.push(`Blur effect rasterized in "${node.name}"`);
   }
 
+  // Keep supported text editable in both PSD modes. Fidelity mode still uses
+  // Figma's rendered pixels as the preview while preserving Photoshop text data.
+  if (node.type === 'TEXT') {
+    const reason = textEditableReason(node);
+    if (!reason) {
+      out.push({ kind: 'text', node, name: node.name, clip });
+      plan.preserved++;
+      plan.textPreserved++;
+      return;
+    }
+    plan.warnings.push(`${reason} ("${node.name}")`);
+  }
+
   if (opts.mode === 'editable') {
-    if (node.type === 'TEXT') {
-      const reason = textEditableReason(node);
-      if (!reason) {
-        out.push({ kind: 'text', node, name: node.name, clip });
-        plan.preserved++;
-        plan.textPreserved++;
-        return;
-      }
-      plan.warnings.push(`${reason} ("${node.name}")`);
-    } else if (isSimpleRect(node)) {
+    if (isSimpleRect(node)) {
       out.push({ kind: 'shape', node, name: node.name, clip });
       plan.preserved++;
       return;
