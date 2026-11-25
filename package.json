@@ -1,0 +1,38 @@
+{
+  "name": "omni-export",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Figma plugin: export frames to layered PSD, Illustrator SVG/PDF and single-file HTML. Fully local.",
+  "type": "module",
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "dev": "concurrently -n ui,plugin \"vite build --mode development --watch\" \"vite build -c vite.config.plugin.ts --mode development --watch\"",
+    "build": "npm run clean && vite build && vite build -c vite.config.plugin.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts,.tsx",
+    "format": "prettier --write .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "ag-psd": "^34.2.0",
+    "jszip": "^3.10.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.142.0",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^10.0.7",
+    "eslint": "^8.57.1",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "prettier": "^3.10.1",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.21",
+    "vite-plugin-singlefile": "^2.3.4",
+    "vitest": "^2.1.9"
+  }
+}
