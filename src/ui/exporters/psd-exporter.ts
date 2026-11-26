@@ -225,6 +225,13 @@ export function planPsd(
 
   const planRootContents = (root: SerializedNode, out: PlanItem[]) => {
     const kids = root.children ?? [];
+    // A selected text node is itself a layer, not a canvas whose contents
+    // should be flattened. Route it through the same editable-text handling
+    // used for text nested inside a selected frame.
+    if (root.type === 'TEXT') {
+      planNode(root, st, null, out);
+      return;
+    }
     const hasMask = kids.some((k) => k.isMask);
     const isContainer = CONTAINER_TYPES.includes(root.type) && kids.length > 0 && !root.svg;
     plan.processed++;
