@@ -50,14 +50,14 @@ describe('PSD plan', () => {
     const plan = planPsd([tree], { ...opts, preserveGroups: false }, false);
     expect(plan.items.some((i) => i.kind === 'folder')).toBe(false);
   });
-  it('rasterizes mixed text in editable mode with a warning, keeps simple text', () => {
+  it('keeps mixed-style text editable and preserves simple text', () => {
     const t = node({ name: 'T', type: 'TEXT', characters: 'x', fills: red });
     const m = node({ name: 'M', type: 'TEXT', characters: 'x', fills: red, mixedText: true });
     const root = node({ name: 'R', type: 'FRAME', children: [t, m] });
     const plan = planPsd([root], { ...opts, mode: 'editable' }, false);
     const kinds = Object.fromEntries(flattenPlan(plan.items).map((i) => [i.name, i.kind]));
-    expect(kinds).toMatchObject({ T: 'text', M: 'raster' });
-    expect(plan.warnings.join()).toContain('Mixed-style text was rasterized');
+    expect(kinds).toMatchObject({ T: 'text', M: 'text' });
+    expect(plan.warnings.join()).not.toContain('Mixed-style text was rasterized');
   });
   it('flattens groups containing masks', () => {
     const root = node({

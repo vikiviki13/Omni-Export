@@ -57,8 +57,7 @@ Sandbox ↔ UI communication uses typed messages (`src/shared/types.ts`); only s
 - **PSD, high fidelity (default):** the Figma hierarchy becomes PSD folders. Each visual leaf is exported with `exportAsync` as a transparent PNG and placed at
   `localLeft = childAbsoluteX − rootAbsoluteX` (using render bounds, so strokes/effects are not shifted). Frames with their own fill/stroke/shadow get a
   separate "… background" layer. Ancestor clipping is applied by cropping. A flattened composite and thumbnail are generated.
-- **PSD, experimental editable:** simple text → PSD text layers (with pixel preview), solid square-cornered rectangles → shape layers. Anything else is rasterized
-  with a warning. One failing layer never cancels the export.
+- **PSD, editable:** supported text (including mixed-style runs), solid or linear fills on square-cornered rectangles and ellipses, solid shape strokes, and drop/inner shadows become native Photoshop text/shape layers with pixel previews. Other artwork remains in named raster layers so the visual result is retained. One failing layer never cancels the export.
 - **Illustrator:** SVG comes from Figma's SVG export, then ids are sanitised/de-duplicated and the file is validated and optionally optimised. PDF is Figma's PDF export.
   Multiple frames can be separate files, a ZIP package, or one combined SVG with artboards side by side.
 - **HTML:** semantic tags are inferred from layer/component names (`Button/Primary` → `<button>`, `Heading/H1` → `<h1>`, `Navigation/Header` → `<header><nav>`,
@@ -82,7 +81,7 @@ Check PSDs in Photoshop, Photopea or Affinity Photo (folders, names, order, posi
 
 ## Limitations
 
-- PSD is RGB, 8 bits per channel. Complex effects, masks, boolean operations and blends across groups are rasterized.
+- PSD is RGB, 8 bits per channel. Complex effects, masks, boolean operations, multi-paint fills, non-solid strokes, and vector geometry beyond simple rectangles and ellipses remain raster layers; editable text depends on fonts being available in Photoshop.
 - Layer opacity is baked into exported PNG pixels (PSD layer opacity stays 100 % on raster layers); group opacity is kept on folders.
 - Experimental PSD text layers may not match Photoshop exactly (PostScript names are derived from Figma font names).
 - **Native `.ai` output is not generated.** Open the SVG or PDF in Illustrator.

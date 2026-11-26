@@ -97,7 +97,6 @@ function hasOwnPaint(n: SerializedNode): boolean {
 }
 
 function textEditableReason(n: SerializedNode): string | null {
-  if (n.mixedText) return 'Mixed-style text was rasterized';
   if (n.hasMissingFont) return 'Font was not available in PSD';
   if (n.rotation) return 'Rotated text was rasterized';
   if (n.textCase && n.textCase !== 'ORIGINAL') return 'Text with case transform was rasterized';
@@ -110,17 +109,24 @@ function textEditableReason(n: SerializedNode): string | null {
   return null;
 }
 
-function isSimpleRect(n: SerializedNode): boolean {
-  if (n.type !== 'RECTANGLE' || n.rotation || n.opacity !== 1 || n.cornerRadius) return false;
-  if ((n.effects ?? []).some((e) => e.visible) || (n.strokes ?? []).some((s) => s.visible))
-    return false;
+function editableShapePaint(n: SerializedNode) {
+  if (!['RECTANGLE', 'ELLIPSE', 'FRAME', 'COMPONENT', 'INSTANCE'].includes(n.type) || n.rotation || n.opacity !== 1 || n.cornerRadius) return null;
+  const strokes = (n.strokes ?? []).filter((s) => s.visible);
+  if (strokes.length > 1 || (strokes.length === 1 && (strokes[0].type !== 'SOLID' || !strokes[0].color))) return null;
+  if ((n.effects ?? []).some((e) => e.visible && !['DROP_SHADOW', 'INNER_SHADOW'].includes(e.type))) return null;
   const fills = (n.fills ?? []).filter((f) => f.visible);
-  return (
-    fills.length === 1 &&
-    fills[0].type === 'SOLID' &&
-    fills[0].opacity === 1 &&
-    (fills[0].color?.a ?? 1) === 1
-  );
+  if (fills.length !== 1 || fills[0].opacity !== 1) return null;
+  if (fills[0].type === 'SOLID' && fills[0].color && (fills[0].color.a ?? 1) === 1) return fills[0];
+  if (fills[0].type === 'GRADIENT_LINEAR' && (fills[0].gradientStops?.length ?? 0) >= 2) return fills[0];
+  return null;
+}
+
+function isSimpleRect(n: SerializedNode): boolean {
+  return !!editableShapePaint(n);
+}
+
+function nativePaintItem(node: SerializedNode, name: string, clip: Rect | null, backgroundOnly = false): PlanItem | null {
+  return editableShapePaint(node) ? { kind: 'shape', node, name, clip, backgroundOnly } : null;
 }
 
 function planNode(
@@ -152,14 +158,14 @@ function planNode(
       : clip;
     const inner: PlanItem[] = [];
     if (hasOwnPaint(node)) {
-      inner.push({
-        kind: 'raster',
-        node,
-        name: `${node.name} background`,
-        backgroundOnly: true,
-        clip,
-      });
-      plan.rasterized++;
+      const bg = st.opts.mode === 'editable' && nativePaintItem(node, `${node.name} background`, clip, true);
+      if (bg) {
+        inner.push(bg);
+        plan.preserved++;
+      } else {
+        inner.push({ kind: 'raster', node, name: `${node.name} background`, backgroundOnly: true, clip });
+        plan.rasterized++;
+      }
     }
     for (const k of kids) planNode(k, st, childClip, inner);
     if (opts.preserveGroups) {
@@ -191,12 +197,10 @@ function planNode(
     plan.warnings.push(`${reason} ("${node.name}")`);
   }
 
-  if (opts.mode === 'editable') {
-    if (isSimpleRect(node)) {
-      out.push({ kind: 'shape', node, name: node.name, clip });
-      plan.preserved++;
-      return;
-    }
+  if (opts.mode === 'editable' && isSimpleRect(node)) {
+    out.push({ kind: 'shape', node, name: node.name, clip });
+    plan.preserved++;
+    return;
   }
   out.push({ kind: 'raster', node, name: node.name, clip });
   plan.rasterized++;
@@ -235,22 +239,25 @@ export function planPsd(
     const hasMask = kids.some((k) => k.isMask);
     const isContainer = CONTAINER_TYPES.includes(root.type) && kids.length > 0 && !root.svg;
     plan.processed++;
-    if (!isContainer || hasMask) {
-      if (hasMask) plan.warnings.push(`Complex mask flattened in "${root.name}"`);
+    if (!isContainer) {
       out.push({ kind: 'raster', node: root, name: root.name, clip: null });
       plan.rasterized++;
       return;
     }
+    // Keep a frame's image/fill background and its ordinary children as separate
+    // PSD layers even when it contains a root-level mask. Child masks are
+    // retained as layers; Photoshop mask clipping is not synthesized here.
+    if (hasMask) plan.warnings.push(`Root-level mask clipping may differ in "${root.name}"; child layers were preserved`);
     const clip = root.clipsContent ? root.bounds : null;
     if (withBg && hasOwnPaint(root)) {
-      out.push({
-        kind: 'raster',
-        node: root,
-        name: 'Background',
-        backgroundOnly: true,
-        clip: null,
-      });
-      plan.rasterized++;
+      const bg = st.opts.mode === 'editable' && nativePaintItem(root, 'Background', null, true);
+      if (bg) {
+        out.push(bg);
+        plan.preserved++;
+      } else {
+        out.push({ kind: 'raster', node: root, name: 'Background', backgroundOnly: true, clip: null });
+        plan.rasterized++;
+      }
     }
     for (const k of kids) planNode(k, st, clip, out);
   };
@@ -399,6 +406,21 @@ function decorate(
     const lh = typeof n.lineHeight === 'number' ? n.lineHeight * scale : undefined;
     const ls =
       typeof n.letterSpacing === 'number' && n.fontSize ? (n.letterSpacing / n.fontSize) * 1000 : 0;
+    const styleFor = (segment: NonNullable<SerializedNode['textSegments']>[number]) => ({
+      font: { name: psFontName(segment.fontFamily, segment.fontStyle) },
+      fontSize: segment.fontSize * scale,
+      fillColor: toPsdColor(segment.color ?? fill),
+      tracking: typeof segment.letterSpacing === 'number' && segment.fontSize
+        ? Math.round((segment.letterSpacing / segment.fontSize) * 1000)
+        : 0,
+      autoLeading: typeof segment.lineHeight !== 'number',
+      leading: typeof segment.lineHeight === 'number' ? segment.lineHeight * scale : undefined,
+      fauxBold: segment.fontWeight >= 600,
+      fauxItalic: segment.italic,
+      underline: segment.textDecoration === 'UNDERLINE',
+      strikethrough: segment.textDecoration === 'STRIKETHROUGH',
+    });
+    const segments = n.textSegments ?? [];
     layer.text = {
       text: (n.characters ?? '').replace(/\r?\n/g, '\r'),
       transform: [1, 0, 0, 1, place.left, place.top],
@@ -414,30 +436,92 @@ function decorate(
         underline: n.textDecoration === 'UNDERLINE',
         strikethrough: n.textDecoration === 'STRIKETHROUGH',
       },
+      ...(segments.length > 1 ? {
+        styleRuns: segments.map((segment) => ({ length: segment.characters.length, style: styleFor(segment) })),
+      } : {}),
       paragraphStyle: { justification: align },
     };
   } else if (item.kind === 'shape') {
-    const fill = (n.fills ?? []).find((f) => f.visible)!.color!;
+    const fill = editableShapePaint(n)!;
     const r = layerPlacement(n.bounds, origin, scale);
     const w = n.width * scale;
     const h = n.height * scale;
-    const knot = (x: number, y: number) => ({ linked: false, points: [x, y, x, y, x, y] });
-    layer.vectorFill = { type: 'color', color: toPsdColor(fill) };
+    if (fill.type === 'SOLID' && fill.color) {
+      layer.vectorFill = { type: 'color', color: toPsdColor(fill.color) };
+    } else if (fill.type === 'GRADIENT_LINEAR' && fill.gradientStops) {
+      const matrix = fill.gradientTransform;
+      const a = matrix?.[0]?.[0] ?? 1;
+      const b = matrix?.[1]?.[0] ?? 0;
+      layer.vectorFill = {
+        type: 'solid',
+        name: `${n.name} gradient`,
+        style: 'linear',
+        angle: Math.atan2(b, a) * 180 / Math.PI,
+        scale: 100,
+        colorStops: fill.gradientStops.map((stop) => ({
+          color: toPsdColor(stop.color),
+          location: Math.round(Math.max(0, Math.min(1, stop.position)) * 4096),
+          midpoint: 50,
+        })),
+        opacityStops: fill.gradientStops.map((stop) => ({
+          opacity: Math.round(Math.max(0, Math.min(1, stop.color.a * fill.opacity)) * 100),
+          location: Math.round(Math.max(0, Math.min(1, stop.position)) * 4096),
+          midpoint: 50,
+        })),
+      };
+    }
+    const left = r.left;
+    const top = r.top;
+    const right = left + w;
+    const bottom = top + h;
+    const knot = (x: number, y: number, dx = 0, dy = 0) => ({
+      linked: true,
+      points: [x - dx, y - dy, x, y, x + dx, y + dy],
+    });
+    const k = item.node.type === 'ELLIPSE' ? 0.5522847498 : 0;
     layer.vectorMask = {
       paths: [
         {
           open: false,
           operation: 'combine',
           fillRule: 'non-zero',
-          knots: [
-            knot(r.left, r.top),
-            knot(r.left + w, r.top),
-            knot(r.left + w, r.top + h),
-            knot(r.left, r.top + h),
-          ],
+          knots: item.node.type === 'ELLIPSE'
+            ? [knot((left + right) / 2, top, w / 2 * k), knot(right, (top + bottom) / 2, 0, h / 2 * k), knot((left + right) / 2, bottom, w / 2 * k), knot(left, (top + bottom) / 2, 0, h / 2 * k)]
+            : [knot(left, top), knot(right, top), knot(right, bottom), knot(left, bottom)],
         },
       ],
     };
+    const shadows = (n.effects ?? []).filter((effect) => effect.visible && ['DROP_SHADOW', 'INNER_SHADOW'].includes(effect.type));
+    const shadowData = (effect: NonNullable<SerializedNode['effects']>[number]) => ({
+      present: true,
+      enabled: true,
+      size: { units: 'Pixels' as const, value: (effect.radius ?? 0) * scale },
+      distance: { units: 'Pixels' as const, value: Math.hypot(effect.offsetX ?? 0, effect.offsetY ?? 0) * scale },
+      angle: (Math.atan2(effect.offsetY ?? 0, effect.offsetX ?? 0) * 180 / Math.PI + 360) % 360,
+      choke: { units: 'Pixels' as const, value: (effect.spread ?? 0) * scale },
+      color: toPsdColor(effect.color ?? { r: 0, g: 0, b: 0, a: 1 }),
+      opacity: (effect.color?.a ?? 1) * 100,
+      blendMode: mapBlendMode(effect.blendMode, false),
+    });
+    if (shadows.length) {
+      layer.effects = {
+        ...(shadows.some((effect) => effect.type === 'DROP_SHADOW')
+          ? { dropShadow: shadows.filter((effect) => effect.type === 'DROP_SHADOW').map(shadowData) }
+          : {}),
+        ...(shadows.some((effect) => effect.type === 'INNER_SHADOW')
+          ? { innerShadow: shadows.filter((effect) => effect.type === 'INNER_SHADOW').map(shadowData) }
+          : {}),
+      };
+    }
+    const stroke = (n.strokes ?? []).find((paint) => paint.visible && paint.type === 'SOLID' && paint.color);
+    if (stroke?.color && (n.strokeWeight ?? 0) > 0) {
+      layer.vectorStroke = {
+        strokeEnabled: true,
+        fillEnabled: false,
+        lineWidth: { units: 'Pixels', value: (n.strokeWeight ?? 1) * scale },
+        content: { type: 'color', color: toPsdColor(stroke.color) },
+      };
+    }
   }
 }
 

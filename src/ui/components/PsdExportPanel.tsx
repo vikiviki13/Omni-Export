@@ -20,7 +20,7 @@ export function PsdExportPanel({ options: o, multi, onChange }: Props) {
             onChange={() => set({ mode: 'fidelity' })}
           />
           <span>
-            <b>High fidelity</b> — layered PNG pixels, most reliable
+            <b>High fidelity</b> — preserves rendered appearance in named layers
           </span>
         </label>
         <label className="radio">
@@ -31,7 +31,7 @@ export function PsdExportPanel({ options: o, multi, onChange }: Props) {
             onChange={() => set({ mode: 'editable' })}
           />
           <span>
-            <b>Experimental editable layers</b> — text and rectangles when possible
+            <b>Editable layers</b> — text, linear fills, rectangle and ellipse shapes with solid strokes, and drop shadows; complex artwork stays as pixels
           </span>
         </label>
       </fieldset>
